@@ -1,11 +1,9 @@
 
 import streamlit as st
 import pandas as pd
-from sentence_transformers import SentenceTransformer, util
+from sentence_transformers import SentenceTransformer
 import faiss
-import numpy as np
 import os
-import torch
 
 # Загрузка данных
 data_path = 'book_data.csv'  # Убедитесь, что путь к файлу указан правильно
@@ -49,23 +47,30 @@ def search_books(query, author_query=None, top_k=5):
         query_embedding = model.encode(query, convert_to_tensor=True).cpu().numpy().reshape(1, -1)
         distances, indices = index.search(query_embedding, top_k)
 
+        # Нахождение максимального расстояния для нормализации
+        if len(distances[0]) > 0:
+            max_distance = distances[0].max()  # Используем максимальное расстояние через numpy
+
         # Обработка результатов
-        for idx, score in zip(indices[0], distances[0]):
+        for idx, distance in zip(indices[0], distances[0]):
             author = books_df.iloc[idx]['author']
+            title = books_df.iloc[idx]['title']
+            annotation = books_df.iloc[idx]['annotation']
+            cover_image = books_df.iloc[idx]['image_url']
 
             # Проверяем, есть ли фильтр по автору
-            if author_query is None or (author_query is not None and author_query.strip().lower() in author.strip().lower()):
-                title = books_df.iloc[idx]['title']
-                annotation = books_df.iloc[idx]['annotation']
-                cover_image = books_df.iloc[idx]['image_url']
-
+            if author_query is None or (author_query.strip().lower() in author.strip().lower()):
                 if pd.notna(author) and pd.notna(title):  # Проверка на наличие автора и названия
+                    # Нормализация значения score
+                    score_normalized = 100 - (distance / max_distance) * 100  # Корректируем формулу
+                    score_normalized = max(0, score_normalized)  # Убеждаемся, что score не отрицательный
+
                     results.append({
                         'cover_image': cover_image,
                         'author': author,
                         'title': title,
                         'annotation': annotation,
-                        'similarity_score': score  # Устанавливаем значение совпадения, так как запрос не пуст
+                        'similarity_score': score_normalized  # Устанавливаем нормализованное значение совпадения
                     })
 
     return pd.DataFrame(results)
