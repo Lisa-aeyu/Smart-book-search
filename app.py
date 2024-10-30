@@ -6,20 +6,29 @@ import os
 import streamlit as st
 import numpy as np
 
-# Загрузка данных
-data_path = 'book_data.csv'  # Убедитесь, что путь к файлу указан правильно
-books_df = pd.read_csv(data_path)
+@st.cache_data  # Кэширование данных
+def load_data(data_path):
+    # Загрузка данных
+    books_df = pd.read_csv(data_path)
+    # Фильтруем слишком короткие аннотации для улучшения качества поиска
+    books_df = books_df[books_df['annotation'].apply(lambda x: len(str(x)) > 50)]
+    return books_df
 
-# Фильтруем слишком короткие аннотации для улучшения качества поиска
-books_df = books_df[books_df['annotation'].apply(lambda x: len(str(x)) > 50)]
+@st.cache_resource  # Кэширование модели
+def load_model(model_name):
+    model = SentenceTransformer(model_name)
+    model.eval()  # Перевод модели в режим оценки
+    return model
 
-# Загрузка модели
-model_name = 'cointegrated/rubert-tiny2'  # Модель, которая будет использоваться для создания эмбеддингов
-model = SentenceTransformer(model_name)  # Создание экземпляра модели
-model.eval()  # Перевод модели в режим оценки
-
-# Загрузка сохраненного индекса FAISS
+# Путь к файлу данных и индекса
+data_path = 'book_data.csv'
 index_path = 'faiss_index.index'  # Путь к файлу индекса
+
+# Загружаем данные и модель
+books_df = load_data(data_path)
+model = load_model('cointegrated/rubert-tiny2')  # Загрузка модели
+
+# Загружаем индекс FAISS
 if os.path.exists(index_path):
     index = faiss.read_index(index_path)
 else:
@@ -34,21 +43,20 @@ def search_books(query, author_query=None, top_k=5, search_mode='symmetric'):
         filtered_books = books_df[books_df['author'].str.contains(author_query.strip(), case=False, na=False)]
 
         # Ограничиваем результаты до top_k
-        for _, row in filtered_books.head(top_k).iterrows():  # Берем только первые top_k записей
+        for _, row in filtered_books.head(top_k).iterrows():
             results.append({
                 'cover_image': row['image_url'],
                 'author': row['author'],
                 'title': row['title'],
                 'annotation': row['annotation'],
-                'similarity_score': None  # Устанавливаем None, поскольку поиск по аннотации не выполняется
+                'similarity_score': None
             })
     else:
         # Поиск по аннотациям, если введено описание
         query_embedding = model.encode(query, convert_to_tensor=True).cpu().numpy().reshape(1, -1)
 
-        # Асимметричный поиск
         # Получаем эмбеддинги аннотаций из индекса
-        annotation_embeddings = index.reconstruct_n(0, books_df.shape[0])  # Получаем все эмбеддинги
+        annotation_embeddings = index.reconstruct_n(0, books_df.shape[0])
 
         # Рассчитываем косинусное сходство
         distances = util.pytorch_cos_sim(query_embedding, annotation_embeddings)
@@ -58,7 +66,8 @@ def search_books(query, author_query=None, top_k=5, search_mode='symmetric'):
         indices = np.argsort(-distances)[:top_k]  # Получаем индексы top_k с наибольшими значениями
 
         # Обработка результатов
-        for idx, score in zip(indices, distances[indices]):
+        for idx in indices:
+            score = distances[idx]
             author = books_df.iloc[idx]['author']
             title = books_df.iloc[idx]['title']
             annotation = books_df.iloc[idx]['annotation']
@@ -66,7 +75,7 @@ def search_books(query, author_query=None, top_k=5, search_mode='symmetric'):
 
             # Проверяем, есть ли фильтр по автору
             if author_query is None or (author_query.strip().lower() in author.strip().lower()):
-                if pd.notna(author) and pd.notna(title):  # Проверка на наличие автора и названия
+                if pd.notna(author) and pd.notna(title):
                     results.append({
                         'cover_image': cover_image,
                         'author': author,
@@ -89,7 +98,7 @@ top_k = st.number_input("Количество книг для поиска", min
 # Кнопка для запуска поиска
 if st.button("Найти"):
     if user_query or author_query:
-        results_df = search_books(user_query, author_query if author_query else None, top_k, search_mode='asymmetric')
+        results_df = search_books(user_query, author_query if author_query else None, top_k)
 
         if not results_df.empty:
             st.subheader("Результаты, которые лучше всего соответствуют запросу:")
