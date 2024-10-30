@@ -58,8 +58,7 @@ def search_books(query, author_query=None, top_k=5, search_mode='symmetric'):
         indices = np.argsort(-distances)[:top_k]  # Получаем индексы top_k с наибольшими значениями
 
         # Обработка результатов
-        for idx in indices:
-            score = distances[idx]
+        for idx, score in zip(indices, distances[indices]):
             author = books_df.iloc[idx]['author']
             title = books_df.iloc[idx]['title']
             annotation = books_df.iloc[idx]['annotation']
@@ -73,11 +72,10 @@ def search_books(query, author_query=None, top_k=5, search_mode='symmetric'):
                         'author': author,
                         'title': title,
                         'annotation': annotation,
-                        'similarity_score': score * 100  # Преобразуем в проценты
+                        'similarity_score': score.item()  # Сохраняем схожесть
                     })
 
     return pd.DataFrame(results)
-
 
 # Streamlit app setup
 st.title("📚 find my book")
@@ -105,8 +103,7 @@ if st.button("Найти"):
                     st.write(f"<strong>Автор:</strong> {row['author']}", unsafe_allow_html=True)
                     st.write(f"<strong>Аннотация:</strong> {row['annotation']}", unsafe_allow_html=True)
                     if row['similarity_score'] is not None:  # Отображаем только если значение совпадения не None
-                        st.write(f"<strong>Совпадение по описанию:</strong> {row['similarity_score']:.2f}%",
-                                 unsafe_allow_html=True)
+                        st.write(f"<strong>Similarity score:</strong> {row['similarity_score']:.2f}", unsafe_allow_html=True)
         else:
             st.write("Нет подходящих книг для данного запроса")
     else:
