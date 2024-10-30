@@ -1,10 +1,10 @@
-
 import pandas as pd
 from sentence_transformers import SentenceTransformer, util
 import faiss
 import os
 import streamlit as st
 import numpy as np
+
 
 @st.cache_data  # Кэширование данных
 def load_data(data_path):
@@ -14,25 +14,32 @@ def load_data(data_path):
     books_df = books_df[books_df['annotation'].apply(lambda x: len(str(x)) > 50)]
     return books_df
 
+
 @st.cache_resource  # Кэширование модели
 def load_model(model_name):
     model = SentenceTransformer(model_name)
     model.eval()  # Перевод модели в режим оценки
     return model
 
+
+@st.cache_resource  # Кэширование индекса FAISS
+def load_faiss_index(index_path):
+    if os.path.exists(index_path):
+        return faiss.read_index(index_path)
+    else:
+        st.error("Ошибка: файл индекса не найден.")
+        return None
+
+
 # Путь к файлу данных и индекса
-data_path = 'book_data.csv'
+data_path = 'book_data.csv'  # Путь к файлу датасета
 index_path = 'faiss_index.index'  # Путь к файлу индекса
 
-# Загружаем данные и модель
+# Загружаем данные, модель и индекс FAISS
 books_df = load_data(data_path)
 model = load_model('cointegrated/rubert-tiny2')  # Загрузка модели
+index = load_faiss_index(index_path)  # Загрузка индекса FAISS
 
-# Загружаем индекс FAISS
-if os.path.exists(index_path):
-    index = faiss.read_index(index_path)
-else:
-    st.write("Ошибка: файл индекса не найден.")
 
 def search_books(query, author_query=None, top_k=5, search_mode='symmetric'):
     results = []
@@ -43,20 +50,20 @@ def search_books(query, author_query=None, top_k=5, search_mode='symmetric'):
         filtered_books = books_df[books_df['author'].str.contains(author_query.strip(), case=False, na=False)]
 
         # Ограничиваем результаты до top_k
-        for _, row in filtered_books.head(top_k).iterrows():
+        for _, row in filtered_books.head(top_k).iterrows():  # Берем только первые top_k записей
             results.append({
                 'cover_image': row['image_url'],
                 'author': row['author'],
                 'title': row['title'],
                 'annotation': row['annotation'],
-                'similarity_score': None
+                'similarity_score': None  # Устанавливаем None, поскольку поиск по аннотации не выполняется
             })
     else:
         # Поиск по аннотациям, если введено описание
         query_embedding = model.encode(query, convert_to_tensor=True).cpu().numpy().reshape(1, -1)
 
         # Получаем эмбеддинги аннотаций из индекса
-        annotation_embeddings = index.reconstruct_n(0, books_df.shape[0])
+        annotation_embeddings = index.reconstruct_n(0, books_df.shape[0])  # Получаем все эмбеддинги
 
         # Рассчитываем косинусное сходство
         distances = util.pytorch_cos_sim(query_embedding, annotation_embeddings)
@@ -75,7 +82,7 @@ def search_books(query, author_query=None, top_k=5, search_mode='symmetric'):
 
             # Проверяем, есть ли фильтр по автору
             if author_query is None or (author_query.strip().lower() in author.strip().lower()):
-                if pd.notna(author) and pd.notna(title):
+                if pd.notna(author) and pd.notna(title):  # Проверка на наличие автора и названия
                     results.append({
                         'cover_image': cover_image,
                         'author': author,
@@ -85,6 +92,7 @@ def search_books(query, author_query=None, top_k=5, search_mode='symmetric'):
                     })
 
     return pd.DataFrame(results)
+
 
 # Streamlit app setup
 st.title("📚 find my book")
@@ -112,7 +120,8 @@ if st.button("Найти"):
                     st.write(f"<strong>Автор:</strong> {row['author']}", unsafe_allow_html=True)
                     st.write(f"<strong>Аннотация:</strong> {row['annotation']}", unsafe_allow_html=True)
                     if row['similarity_score'] is not None:  # Отображаем только если значение совпадения не None
-                        st.write(f"<strong>Similarity score:</strong> {row['similarity_score']:.2f}", unsafe_allow_html=True)
+                        st.write(f"<strong>Similarity score:</strong> {row['similarity_score']:.2f}",
+                                 unsafe_allow_html=True)
         else:
             st.write("Нет подходящих книг для данного запроса")
     else:
