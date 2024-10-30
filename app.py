@@ -1,9 +1,10 @@
 
-import streamlit as st
 import pandas as pd
-from sentence_transformers import SentenceTransformer
+from sentence_transformers import SentenceTransformer, util
 import faiss
 import os
+import streamlit as st
+import numpy as np
 
 # Загрузка данных
 data_path = 'book_data.csv'  # Убедитесь, что путь к файлу указан правильно
@@ -13,7 +14,7 @@ books_df = pd.read_csv(data_path)
 books_df = books_df[books_df['annotation'].apply(lambda x: len(str(x)) > 50)]
 
 # Загрузка модели
-model_name = 'cointegrated/rubert-tiny2'  # Модель, которая будет использоваться для создания экземпляра
+model_name = 'cointegrated/rubert-tiny2'  # Модель, которая будет использоваться для создания эмбеддингов
 model = SentenceTransformer(model_name)  # Создание экземпляра модели
 model.eval()  # Перевод модели в режим оценки
 
@@ -24,8 +25,7 @@ if os.path.exists(index_path):
 else:
     st.write("Ошибка: файл индекса не найден.")
 
-
-def search_books(query, author_query=None, top_k=5):
+def search_books(query, author_query=None, top_k=5, search_mode='symmetric'):
     results = []
 
     # Если введен только автор
@@ -45,14 +45,21 @@ def search_books(query, author_query=None, top_k=5):
     else:
         # Поиск по аннотациям, если введено описание
         query_embedding = model.encode(query, convert_to_tensor=True).cpu().numpy().reshape(1, -1)
-        distances, indices = index.search(query_embedding, top_k)
 
-        # Нахождение максимального расстояния для нормализации
-        if len(distances[0]) > 0:
-            max_distance = distances[0].max()  # Используем максимальное расстояние через numpy
+        # Асимметричный поиск
+        # Получаем эмбеддинги аннотаций из индекса
+        annotation_embeddings = index.reconstruct_n(0, books_df.shape[0])  # Получаем все эмбеддинги
+
+        # Рассчитываем косинусное сходство
+        distances = util.pytorch_cos_sim(query_embedding, annotation_embeddings)
+
+        # Преобразуем полученные значения расстояний в одномерный массив
+        distances = distances.cpu().numpy().flatten()
+        indices = np.argsort(-distances)[:top_k]  # Получаем индексы top_k с наибольшими значениями
 
         # Обработка результатов
-        for idx, distance in zip(indices[0], distances[0]):
+        for idx in indices:
+            score = distances[idx]
             author = books_df.iloc[idx]['author']
             title = books_df.iloc[idx]['title']
             annotation = books_df.iloc[idx]['annotation']
@@ -61,16 +68,12 @@ def search_books(query, author_query=None, top_k=5):
             # Проверяем, есть ли фильтр по автору
             if author_query is None or (author_query.strip().lower() in author.strip().lower()):
                 if pd.notna(author) and pd.notna(title):  # Проверка на наличие автора и названия
-                    # Нормализация значения score
-                    score_normalized = 100 - (distance / max_distance) * 100  # Корректируем формулу
-                    score_normalized = max(0, score_normalized)  # Убеждаемся, что score не отрицательный
-
                     results.append({
                         'cover_image': cover_image,
                         'author': author,
                         'title': title,
                         'annotation': annotation,
-                        'similarity_score': score_normalized  # Устанавливаем нормализованное значение совпадения
+                        'similarity_score': score * 100  # Преобразуем в проценты
                     })
 
     return pd.DataFrame(results)
@@ -88,7 +91,7 @@ top_k = st.number_input("Количество книг для поиска", min
 # Кнопка для запуска поиска
 if st.button("Найти"):
     if user_query or author_query:
-        results_df = search_books(user_query, author_query if author_query else None, top_k)
+        results_df = search_books(user_query, author_query if author_query else None, top_k, search_mode='asymmetric')
 
         if not results_df.empty:
             st.subheader("Результаты, которые лучше всего соответствуют запросу:")
@@ -102,7 +105,8 @@ if st.button("Найти"):
                     st.write(f"<strong>Автор:</strong> {row['author']}", unsafe_allow_html=True)
                     st.write(f"<strong>Аннотация:</strong> {row['annotation']}", unsafe_allow_html=True)
                     if row['similarity_score'] is not None:  # Отображаем только если значение совпадения не None
-                        st.write(f"<strong>Совпадение по описанию:</strong> {row['similarity_score']:.2f}%", unsafe_allow_html=True)
+                        st.write(f"<strong>Совпадение по описанию:</strong> {row['similarity_score']:.2f}%",
+                                 unsafe_allow_html=True)
         else:
             st.write("Нет подходящих книг для данного запроса")
     else:
